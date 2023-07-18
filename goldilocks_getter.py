@@ -205,7 +205,8 @@ def make_soup(
     soup_dict = {}
     for ele in soup.find_all("code"):
         try:
-            if qos in ele.parent.parent.parent.h5.text:
+            if qos in ele.parent.parent.parent.find("div", { "class" : "layoutCluster --start" }).h5.text:
+                print(f"+++ Found QoS +++")
                 # I'm so sorry.
                 new_ele_name = ele.parent.parent.parent.parent.parent.parent.summary.h3.text.strip().split("\n")[1].strip()
                 soup_dict[new_ele_name] = ele.text
