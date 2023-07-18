@@ -25,7 +25,6 @@ def setup_args():
         "-d",
         "--domain",
         help="domain where goldilocks is installed, e.g. foo.net",
-        required=True
     )
 
     parser.add_argument(
@@ -65,12 +64,26 @@ def setup_args():
         action="store_true"
     )
 
+    parser.add_argument(
+        "-c",
+        "--context",
+        help="Kubeconfig context to use"
+    )
+
+    parser.add_argument(
+        "-p",
+        "--port-forward",
+        help="Port number to use if accessing Goldilocks via localhost port-forward"
+    )
+    # TODO: update edited functions doc
+
+
     args = parser.parse_args()
 
     return args
 
 
-def get_clusters(env: str, test: bool = False) -> List[str]:
+def get_clusters(env: str, context: str, test: bool = False) -> List[str]:
     """Gets prod k8s clusters.
     Uses the user's kubeconfig file to get all clusters available, and then
     filters to the user's desired environment. If the _ in the call to
@@ -89,9 +102,15 @@ def get_clusters(env: str, test: bool = False) -> List[str]:
     """
 
     contexts, _ = k8s.config.list_kube_config_contexts()
-    filtered_contexts = [x["name"] for x in contexts if x["name"].startswith(env)]
-    if test:
-        return filtered_contexts[:1]
+    print(f"contexts: {contexts}")
+
+    filtered_contexts = []
+    if context:
+        filtered_contexts = [x["name"] for x in contexts if x["name"] == context]
+    else:
+        filtered_contexts = [x["name"] for x in contexts if x["name"].startswith(env)]
+        if test:
+            return filtered_contexts[:1]
     return filtered_contexts
 
 
@@ -116,10 +135,12 @@ def get_namespaces(cluster: str) -> List[str]:
     )
     namespaces = client.list_namespace()
     filtered_namespaces = []
-
-    for pod in [x.metadata for x in namespaces.items if x.metadata.labels]:
-        if pod.labels["goldilocks.fairwinds.com/enabled"]:
-            filtered_namespaces.append(pod.name)
+    
+    for ns in namespaces.items:
+        if ns.metadata.labels:
+            for label, value in ns.metadata.labels.items():
+                if label == "goldilocks.fairwinds.com/enabled" and value == "true":
+                    filtered_namespaces.append(ns.metadata.name)
 
     return filtered_namespaces
 
@@ -147,10 +168,15 @@ def get_html(
     # This may need to be adjusted depending on your naming scheme.
     cluster_name = "-".join(cluster.split("-")[:-1])
     try:
-        endpoint = f"https://goldilocks-{cluster_name}.{domain}/dashboard/{namespace}"
+        endpoint = ""
+        if domain:
+            endpoint = f"https://goldilocks-{cluster_name}.{domain}/dashboard/{namespace}"
+        else:       # assume localhost port-forward on 8080
+            endpoint = f"http://127.0.0.1:8080/dashboard/{namespace}"      # TODO: use parser argument for port-forward port
+        # print(f">>> Sending request to {endpoint}")
         request = requests.get(endpoint)
-    except requests.exceptions.ConnectionError:
-        print(f"Exception raised when connecting to {endpoint}")
+    except requests.exceptions.ConnectionError as error:
+        print(f"Exception raised when connecting to {endpoint}: {error}")
         raise SystemExit
 
     return request.content
@@ -354,7 +380,7 @@ def make_aggregate_dataframes(
     return cpu_requests_df, cpu_limits_df, memory_requests_df, memory_limits_df
 
 
-def get_recs(domain: str, test: bool = False) -> tuple:
+def get_recs(domain: str, context: str, test: bool = False) -> tuple:
     """Calls most of the functions to get recommendations.
     Calls other functions to generate a nested_dict containing all recommendations.
 
@@ -370,7 +396,8 @@ def get_recs(domain: str, test: bool = False) -> tuple:
     """
     cluster_namespaces = {}
     mega_dict = nested_dict()
-    clusters = get_clusters("prod", test)
+    # TODO: handle env
+    clusters = get_clusters("prod", context, test)
 
     for cluster in clusters:
         cluster_namespaces[cluster] = get_namespaces(cluster)
@@ -510,8 +537,10 @@ if __name__ == "__main__":
     args = setup_args()
 
     print("Initializing...")
-    clusters, mega_dict = get_recs(args.domain, args.test)
+    clusters, mega_dict = get_recs(args.domain, args.context, args.test)
     useful_mega_dict = make_useful_dict(mega_dict)
+
+    # print(f"Useful mega dict: {useful_mega_dict}")
 
     cpu_lim_df, mem_lim_df = make_dataframe(
         useful_mega_dict,
